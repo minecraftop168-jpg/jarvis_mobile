@@ -27,7 +27,7 @@ jobs:
       run: |
         flutter create --org com.jarvis jarvis_app
         cd jarvis_app
-        flutter pub add http speech_to_text installed_apps
+        flutter pub add http speech_to_text installed_apps flutter_tts
 
     - name: Write Custom Main Code
       run: |
@@ -37,6 +37,7 @@ jobs:
         import 'dart:convert';
         import 'package:speech_to_text/speech_to_text.dart' as stt;
         import 'package:installed_apps/installed_apps.dart';
+        import 'package:flutter_tts/flutter_tts.dart';
 
         void main() => runApp(const JarvisMobileEngine());
 
@@ -64,19 +65,31 @@ jobs:
         class _JarvisCorePanelState extends State<JarvisCorePanel> {
           final String pcIpAddress = '192.168.1.8';
           late stt.SpeechToText _speech;
+          late FlutterTts _tts;
           bool _isListening = false;
-          String _terminalLogs = "JARVIS ANDROID AGENT: ACTIVE & STANDBY";
+          String _terminalLogs = "JARVIS AGENT: ACTIVE";
 
           @override
           void initState() {
             super.initState();
             _speech = stt.SpeechToText();
-            initBackgroundWakeListener();
+            _tts = FlutterTts();
+            _initJarvisVoice();
           }
 
-          void initBackgroundWakeListener() async {
+          void _initJarvisVoice() async {
+            await _tts.setLanguage("en-IN"); 
+            await _tts.setSpeechRate(0.5);
             bool available = await _speech.initialize();
-            if (available) { startVoiceScanningLoop(); }
+            if (available) { 
+              _jarvisSpeak("Systems fully synchronized. Awaiting orders, sir.");
+              startVoiceScanningLoop(); 
+            }
+          }
+
+          void _jarvisSpeak(String text) async {
+            setState(() { _terminalLogs = "Jarvis: $text\n$_terminalLogs"; });
+            await _tts.speak(text);
           }
 
           void startVoiceScanningLoop() {
@@ -85,16 +98,26 @@ jobs:
               onResult: (result) async {
                 if (result.finalResult) {
                   String input = result.recognizedWords.toLowerCase().trim();
-                  logToConsole("Heard: '$input'");
-                  if (input.contains("hello jarvis")) {
-                    logToConsole("Jarvis Wake Word Activated!");
-                  } else if (input.startsWith("open app in my pc")) {
-                    String pcApp = input.replaceAll("open app in my pc", "").trim();
+                  setState(() { _terminalLogs = "Heard: '$input'\n$_terminalLogs"; });
+
+                  // 1. CHAT CONVERSATION TRICK: Checks for Roman Urdu Phrases locally
+                  if (input.contains("idar hu") || input.contains("idhar ho") || input.contains("where are you")) {
+                    _jarvisSpeak("At your service, sir. I am right here.");
+                  } 
+                  // 2. CROSS-DEVICE TRIGGER: Open apps directly on your PC screen
+                  else if (input.startsWith("open app in my pc") || input.contains("in pc")) {
+                    String pcApp = input.replaceAll("open app in my pc", "").replaceAll("in pc", "").replaceAll("open", "").trim();
+                    _jarvisSpeak("Launching $pcApp on your workstation screen, sir.");
                     routeCommandToPcExe(pcApp);
-                  } else if (input.startsWith("open app")) {
-                    String mobileApp = input.replaceAll("open app", "").trim();
+                  } 
+                  // 3. LOCAL SMART TRIGGER: Open apps on your phone screen
+                  else if (input.startsWith("open app") || input.startsWith("open")) {
+                    String mobileApp = input.replaceAll("open app", "").replaceAll("open", "").trim();
+                    _jarvisSpeak("Deploying $mobileApp on your mobile interface.");
                     launchNativeMobileApp(mobileApp);
                   }
+                  
+                  // Instantly restarts loop so it never stops listening to your voice
                   startVoiceScanningLoop();
                 }
               },
@@ -102,21 +125,15 @@ jobs:
           }
 
           void launchNativeMobileApp(String appQuery) async {
-            logToConsole("Searching local packages for: '$appQuery'...");
             try {
               String packageId = "com.android.chrome"; 
               if (appQuery.contains("whatsapp")) packageId = "com.whatsapp";
               if (appQuery.contains("facebook")) packageId = "com.facebook.katana";
+              if (appQuery.contains("youtube")) packageId = "com.google.android.youtube"; 
               if (appQuery.contains("dialer") || appQuery.contains("call")) packageId = "com.android.dialer";
 
-              bool? installed = await InstalledApps.isAppInstalled(packageId);
-              if (installed == true) {
-                await InstalledApps.startApp(packageId);
-                logToConsole("Successfully deployed local package: $appQuery");
-              } else {
-                logToConsole("Target package structure not found.");
-              }
-            } catch (e) { logToConsole("Launcher configuration error."); }
+              await InstalledApps.startApp(packageId);
+            } catch (e) { _jarvisSpeak("Package target missing from device storage."); }
           }
 
           void routeCommandToPcExe(String targetCommand) async {
@@ -127,43 +144,16 @@ jobs:
                 headers: {"Content-Type": "application/json"},
                 body: jsonEncode({"command": targetCommand}),
               );
-              logToConsole("Network call transmitted successfully.");
-            } catch (e) { logToConsole("PC framework unreachable."); }
-          }
-
-          void logToConsole(String logMsg) {
-            setState(() { _terminalLogs = "$logMsg\n$_terminalLogs"; });
+            } catch (e) { _jarvisSpeak("Unable to reach your computer network server."); }
           }
 
           @override
           Widget build(BuildContext context) {
             return Scaffold(
-              body: Container(
-                width: double.infinity, height: double.infinity,
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 120, height: 120,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle, color: Colors.black,
-                        border: Border.all(color: Colors.cyan, width: 3),
-                        boxShadow: [BoxShadow(color: Colors.cyan.withOpacity(0.3), blurRadius: 15)],
-                      ),
-                      child: const Icon(Icons.radar, size: 50, color: Colors.cyan),
-                    ),
-                    const SizedBox(height: 40),
-                    Expanded(
-                      child: Container(
-                        width: double.infinity, padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(8)),
-                        child: SingleChildScrollView(
-                          child: Text(_terminalLogs, style: const TextStyle(fontFamily: 'monospace', color: Colors.greenAccent, fontSize: 12)),
-                        ),
-                      ),
-                    )
-                  ],
+              body: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(_terminalLogs, textAlign: TextAlign.center, style: const TextStyle(fontFamily: 'monospace', color: Colors.greenAccent, fontSize: 13)),
                 ),
               ),
             );
