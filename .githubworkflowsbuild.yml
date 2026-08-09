@@ -1,0 +1,183 @@
+name: Flutter APK Cloud Compiler
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Initialize Java Core Environment
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+
+    - name: Deploy Flutter SDK Engine
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+
+    - name: Assemble Workspace and Packages
+      run: |
+        flutter create --org com.jarvis jarvis_app
+        cd jarvis_app
+        flutter pub add http speech_to_text installed_apps
+
+    - name: Write Custom Main Code
+      run: |
+        cat << 'EOF' > jarvis_app/lib/main.dart
+        import 'package:flutter/material.dart';
+        import 'package:http/http.dart' as http;
+        import 'dart:convert';
+        import 'package:speech_to_text/speech_to_text.dart' as stt;
+        import 'package:installed_apps/installed_apps.dart';
+
+        void main() => runApp(const JarvisMobileEngine());
+
+        class JarvisMobileEngine extends StatelessWidget {
+          const JarvisMobileEngine({super.key});
+          @override
+          Widget build(BuildContext context) {
+            return MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: ThemeData.dark().copyWith(
+                primaryColor: Colors.cyan,
+                scaffoldBackgroundColor: const Color(0xFF060911),
+              ),
+              home: const JarvisCorePanel(),
+            );
+          }
+        }
+
+        class JarvisCorePanel extends StatefulWidget {
+          const JarvisCorePanel({super.key});
+          @override
+          State<JarvisCorePanel> createState() => _JarvisCorePanelState();
+        }
+
+        class _JarvisCorePanelState extends State<JarvisCorePanel> {
+          final String pcIpAddress = '192.168.1.8';
+          late stt.SpeechToText _speech;
+          bool _isListening = false;
+          String _terminalLogs = "JARVIS ANDROID AGENT: ACTIVE & STANDBY";
+
+          @override
+          void initState() {
+            super.initState();
+            _speech = stt.SpeechToText();
+            initBackgroundWakeListener();
+          }
+
+          void initBackgroundWakeListener() async {
+            bool available = await _speech.initialize();
+            if (available) { startVoiceScanningLoop(); }
+          }
+
+          void startVoiceScanningLoop() {
+            setState(() => _isListening = true);
+            _speech.listen(
+              onResult: (result) async {
+                if (result.finalResult) {
+                  String input = result.recognizedWords.toLowerCase().trim();
+                  logToConsole("Heard: '$input'");
+                  if (input.contains("hello jarvis")) {
+                    logToConsole("Jarvis Wake Word Activated!");
+                  } else if (input.startsWith("open app in my pc")) {
+                    String pcApp = input.replaceAll("open app in my pc", "").trim();
+                    routeCommandToPcExe(pcApp);
+                  } else if (input.startsWith("open app")) {
+                    String mobileApp = input.replaceAll("open app", "").trim();
+                    launchNativeMobileApp(mobileApp);
+                  }
+                  startVoiceScanningLoop();
+                }
+              },
+            );
+          }
+
+          void launchNativeMobileApp(String appQuery) async {
+            logToConsole("Searching local packages for: '$appQuery'...");
+            try {
+              String packageId = "com.android.chrome"; 
+              if (appQuery.contains("whatsapp")) packageId = "com.whatsapp";
+              if (appQuery.contains("facebook")) packageId = "com.facebook.katana";
+              if (appQuery.contains("dialer") || appQuery.contains("call")) packageId = "com.android.dialer";
+
+              bool? installed = await InstalledApps.isAppInstalled(packageId);
+              if (installed == true) {
+                await InstalledApps.startApp(packageId);
+                logToConsole("Successfully deployed local package: $appQuery");
+              } else {
+                logToConsole("Target package structure not found.");
+              }
+            } catch (e) { logToConsole("Launcher configuration error."); }
+          }
+
+          void routeCommandToPcExe(String targetCommand) async {
+            final url = Uri.parse('http://$pcIpAddress:5000/command');
+            try {
+              await http.post(
+                url,
+                headers: {"Content-Type": "application/json"},
+                body: jsonEncode({"command": targetCommand}),
+              );
+              logToConsole("Network call transmitted successfully.");
+            } catch (e) { logToConsole("PC framework unreachable."); }
+          }
+
+          void logToConsole(String logMsg) {
+            setState(() { _terminalLogs = "$logMsg\n$_terminalLogs"; });
+          }
+
+          @override
+          Widget build(BuildContext context) {
+            return Scaffold(
+              body: Container(
+                width: double.infinity, height: double.infinity,
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 120, height: 120,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle, color: Colors.black,
+                        border: Border.all(color: Colors.cyan, width: 3),
+                        boxShadow: [BoxShadow(color: Colors.cyan.withOpacity(0.3), blurRadius: 15)],
+                      ),
+                      child: const Icon(Icons.radar, size: 50, color: Colors.cyan),
+                    ),
+                    const SizedBox(height: 40),
+                    Expanded(
+                      child: Container(
+                        width: double.infinity, padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(8)),
+                        child: SingleChildScrollView(
+                          child: Text(_terminalLogs, style: const TextStyle(fontFamily: 'monospace', color: Colors.greenAccent, fontSize: 12)),
+                        ),
+                      ),
+                    )
+                  ],
+                ),
+              ),
+            );
+          }
+        }
+        EOF
+
+    - name: Execute Standalone APK Compilation
+      run: |
+        cd jarvis_app
+        flutter build apk --release
+
+    - name: Export Output Application Binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: Standalone-Jarvis-APK
+        path: jarvis_app/build/app/outputs/flutter-apk/app-release.apk
